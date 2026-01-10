@@ -4,6 +4,7 @@ server:
 spring:
   application:
     name: api-gateway
+
   cloud:
     gateway:
       routes:
@@ -14,8 +15,18 @@ spring:
           filters:
             - StripPrefix=1
 
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,gateway
+logging:
+  level:
+    root: INFO
+
+    # Gateway routing & predicate matching
+    org.springframework.cloud.gateway: DEBUG
+    org.springframework.cloud.gateway.route.RouteDefinitionRouteLocator: TRACE
+    org.springframework.cloud.gateway.handler.RoutePredicateHandlerMapping: TRACE
+
+    # Netty / HTTP forwarding details
+    reactor.netty.http.client: DEBUG
+    reactor.netty.http.server: DEBUG
+
+    # Optional: request mapping visibility
+    org.springframework.web.server.adapter.HttpWebHandlerAdapter: DEBUG
