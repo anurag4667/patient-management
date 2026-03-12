@@ -86,6 +86,8 @@ jobs:
           ./api-gateway-2/mvnw -B -f api-gateway-2/pom.xml -DskipTests package
 
       - name: Start auth-service
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
         run: |
           nohup java -jar auth-service/target/*.jar \
             --spring.datasource.url=jdbc:postgresql://localhost:5432/authdb \
