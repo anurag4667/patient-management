@@ -73,7 +73,6 @@ Thumbs.db
 
 # Docker
 /docker/
-/docker-compose.yml
 /docker-compose.override.yml
 
 # Kubernetes
@@ -84,3 +83,6 @@ Thumbs.db
 
 # AWS credentials
 .aws/
+
+/.run/
+
