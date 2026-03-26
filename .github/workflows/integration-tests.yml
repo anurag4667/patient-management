@@ -10,59 +10,6 @@ jobs:
   integration-tests:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: authdb
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres -d authdb"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-
-      mysql:
-        image: mysql:8.4
-        env:
-          MYSQL_DATABASE: patientdb
-          MYSQL_ROOT_PASSWORD: root
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
-
-      kafka:
-        image: apache/kafka:latest
-        ports:
-          - "9092:9092"
-          - "9094:9094"
-        env:
-          KAFKA_NODE_ID: 0
-          KAFKA_PROCESS_ROLES: controller,broker
-          KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
-          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
-          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT,PLAINTEXT:PLAINTEXT
-          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-          KAFKA_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
-          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-        options: >-
-          --health-cmd="/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
-          --health-interval=10s
-          --health-timeout=10s
-          --health-retries=10
-          --health-start-period=30s
-
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -74,83 +21,8 @@ jobs:
           java-version: "21"
           cache: maven
 
-      - name: Map Docker-style service hostnames
-        run: |
-          echo "127.0.0.1 auth-service patient-service billing-service" | sudo tee -a /etc/hosts
-
-      - name: Build application modules
-        run: |
-          ./auth-service/mvnw -B -f auth-service/pom.xml -DskipTests package
-          ./billing-service/mvnw -B -f billing-service/pom.xml -DskipTests package
-          ./patient-service/mvnw -B -f patient-service/pom.xml -DskipTests package
-          ./api-gateway-2/mvnw -B -f api-gateway-2/pom.xml -DskipTests package
-
-      - name: Start auth-service
-        run: |
-          nohup java -jar auth-service/target/*.jar \
-            --spring.datasource.url=jdbc:postgresql://localhost:5432/authdb \
-            --spring.datasource.username=postgres \
-            --spring.datasource.password=postgres \
-            --spring.jpa.hibernate.ddl-auto=none \
-            --spring.sql.init.mode=always \
-            > auth-service.log 2>&1 &
-
-      - name: Wait for auth-service
-        run: |
-          for i in {1..60}; do
-            status="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4005/validate || true)"
-            if [ "$status" = "401" ]; then
-              exit 0
-            fi
-            sleep 2
-          done
-          cat auth-service.log
-          exit 1
-
-      - name: Start billing-service
-        run: |
-          nohup java -jar billing-service/target/*.jar > billing-service.log 2>&1 &
-
-      - name: Wait for billing-service
-        run: |
-          for i in {1..60}; do
-            if bash -c 'printf > /dev/tcp/127.0.0.1/9001' 2>/dev/null; then
-              exit 0
-            fi
-            sleep 2
-          done
-          cat billing-service.log
-          exit 1
-
-      - name: Start patient-service
-        run: |
-          nohup java -jar patient-service/target/*.jar \
-            --spring.datasource.url=jdbc:mysql://localhost:3306/patientdb?createDatabaseIfNotExist=true \
-            --spring.datasource.username=root \
-            --spring.datasource.password=root \
-            --spring.jpa.hibernate.ddl-auto=update \
-            --spring.kafka.bootstrap-servers=localhost:9092 \
-            --billing.service.address=localhost \
-            --billing.service.grpc.port=9001 \
-            > patient-service.log 2>&1 &
-
-      - name: Wait for patient-service
-        run: |
-          for i in {1..60}; do
-            status="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/patients || true)"
-            if [ "$status" = "200" ]; then
-              exit 0
-            fi
-            sleep 2
-          done
-          cat patient-service.log
-          exit 1
-
-      - name: Start api-gateway-2
-        run: |
-          nohup java -jar api-gateway-2/target/*.jar \
-            --auth.service.url=http://localhost:4005 \
-            > api-gateway-2.log 2>&1 &
+      - name: Build and start services with Docker Compose
+        run: docker compose up --build -d
 
       - name: Wait for api-gateway-2
         run: |
@@ -161,11 +33,16 @@ jobs:
             fi
             sleep 2
           done
-          cat api-gateway-2.log
+          docker compose ps
+          docker compose logs --no-color
           exit 1
 
       - name: Run integration tests
         run: mvn -B -f integration-tests/pom.xml test
+
+      - name: Capture compose logs
+        if: always()
+        run: docker compose logs --no-color > docker-compose.log
 
       - name: Upload service logs
         if: always()
@@ -173,7 +50,8 @@ jobs:
         with:
           name: integration-test-logs
           path: |
-            auth-service.log
-            billing-service.log
-            patient-service.log
-            api-gateway-2.log
+            docker-compose.log
+
+      - name: Tear down compose stack
+        if: always()
+        run: docker compose down -v
